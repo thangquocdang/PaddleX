@@ -392,6 +392,44 @@ class _TableRecognitionPipelineV2(BasePipeline):
             # Discard boxes not fully inside table_box
         return adjusted_boxes
 
+    def adjust_ocr_coordinates_to_global(self, table_ocr_res, table_box):
+        """Adjust OCR coordinates from crop region to global image coordinates.
+
+        Args:
+            table_ocr_res (OCRResult): OCR result with coordinates relative to cropped table region.
+            table_box (list): Bounding box [x1, y1, x2, y2] of the table region in the original image.
+
+        Returns:
+            OCRResult: OCR result with adjusted coordinates relative to original image.
+        """
+        x_min_t, y_min_t, _, _ = table_box
+
+        # Copy the OCR result
+        adjusted_ocr_res = dict(table_ocr_res)
+
+        # Adjust rec_boxes coordinates
+        if "rec_boxes" in table_ocr_res:
+            rec_boxes = table_ocr_res["rec_boxes"]
+            if hasattr(rec_boxes, "tolist"):
+                rec_boxes = rec_boxes.tolist()
+            else:
+                rec_boxes = list(rec_boxes) if not isinstance(rec_boxes, list) else rec_boxes
+
+            adjusted_boxes = []
+            for box in rec_boxes:
+                # Adjust each box by adding table offset
+                adjusted_box = [
+                    box[0] + x_min_t,  # x1
+                    box[1] + y_min_t,  # y1
+                    box[2] + x_min_t,  # x2
+                    box[3] + y_min_t,  # y2
+                ]
+                adjusted_boxes.append(adjusted_box)
+
+            adjusted_ocr_res["rec_boxes"] = np.array(adjusted_boxes)
+
+        return OCRResult(adjusted_ocr_res)
+
     def cells_det_results_reprocessing(
         self, cells_det_results, cells_det_scores, ocr_det_results, html_pred_boxes_nums
     ):
@@ -1192,18 +1230,19 @@ class _TableRecognitionPipelineV2(BasePipeline):
 
             doc_preprocessor_image = doc_preprocessor_res["output_img"]
 
-            if model_settings["use_ocr_model"]:
-                overall_ocr_res = list(
-                    self.general_ocr_pipeline(
-                        doc_preprocessor_image,
-                        text_det_limit_side_len=text_det_limit_side_len,
-                        text_det_limit_type=text_det_limit_type,
-                        text_det_thresh=text_det_thresh,
-                        text_det_box_thresh=text_det_box_thresh,
-                        text_det_unclip_ratio=text_det_unclip_ratio,
-                        text_rec_score_thresh=text_rec_score_thresh,
-                    )
-                )[0]
+            # Initialize overall_ocr_res to None (will be populated later if needed)
+            overall_ocr_res = None
+
+            # OCR optimization: Only run OCR on full image if using layout detection
+            # For single-table case (no layout detection), OCR will be done after rotation
+            if model_settings["use_ocr_model"] and model_settings["use_layout_detection"]:
+                # When using layout detection, we'll OCR each table region separately (optimized below)
+                # So we don't need to OCR the full image here
+                pass
+            elif model_settings["use_ocr_model"] and not model_settings["use_layout_detection"]:
+                # For single-table case, defer OCR until after orientation classification and rotation
+                # This avoids OCR-ing twice (before and after rotation)
+                pass
             elif self.general_ocr_pipeline is None and (
                 (
                     use_ocr_results_with_table_cells == True
@@ -1223,19 +1262,26 @@ class _TableRecognitionPipelineV2(BasePipeline):
             table_region_id = 1
 
             if not model_settings["use_layout_detection"] and layout_det_res is None:
+                # Single table mode: treat entire image as one table
                 img_height, img_width = doc_preprocessor_image.shape[:2]
                 table_box = [0, 0, img_width - 1, img_height - 1]
+
+                # Classify table orientation
                 if use_table_orientation_classify == True:
                     table_angle = list(
                         self.table_orientation_classify_model(doc_preprocessor_image)
                     )[0]["label_names"][0]
+
+                # Rotate image if needed
                 if table_angle == "90":
                     doc_preprocessor_image = np.rot90(doc_preprocessor_image, k=1)
                 elif table_angle == "180":
                     doc_preprocessor_image = np.rot90(doc_preprocessor_image, k=2)
                 elif table_angle == "270":
                     doc_preprocessor_image = np.rot90(doc_preprocessor_image, k=3)
-                if table_angle in ["90", "180", "270"]:
+
+                # OCR ONLY ONCE after rotation (OPTIMIZED!)
+                if model_settings["use_ocr_model"]:
                     overall_ocr_res = list(
                         self.general_ocr_pipeline(
                             doc_preprocessor_image,
@@ -1247,6 +1293,9 @@ class _TableRecognitionPipelineV2(BasePipeline):
                             text_rec_score_thresh=text_rec_score_thresh,
                         )
                     )[0]
+
+                # Adjust table_box if rotated
+                if table_angle in ["90", "180", "270"]:
                     tbx1, tby1, tbx2, tby2 = (
                         table_box[0],
                         table_box[1],
@@ -1263,6 +1312,7 @@ class _TableRecognitionPipelineV2(BasePipeline):
                         new_x1, new_y1 = img_height - tby2, tbx1
                         new_x2, new_y2 = img_height - tby1, tbx2
                     table_box = [new_x1, new_y1, new_x2, new_y2]
+
                 single_table_rec_res = self.predict_single_table_recognition_res(
                     doc_preprocessor_image,
                     overall_ocr_res,
@@ -1300,45 +1350,43 @@ class _TableRecognitionPipelineV2(BasePipeline):
                         )
                         crop_img_info = crop_img_info[0]
                         table_box = crop_img_info["box"]
+                        crop_img = crop_img_info["img"]
+
+                        # Classify table orientation
                         if use_table_orientation_classify == True:
-                            doc_preprocessor_image_copy = doc_preprocessor_image.copy()
                             table_angle = list(
-                                self.table_orientation_classify_model(
-                                    crop_img_info["img"]
-                                )
+                                self.table_orientation_classify_model(crop_img)
                             )[0]["label_names"][0]
+
+                        # Rotate cropped table if needed
                         if table_angle == "90":
-                            crop_img_info["img"] = np.rot90(crop_img_info["img"], k=1)
-                            doc_preprocessor_image_copy = np.rot90(
-                                doc_preprocessor_image_copy, k=1
-                            )
+                            crop_img = np.rot90(crop_img, k=1)
                         elif table_angle == "180":
-                            crop_img_info["img"] = np.rot90(crop_img_info["img"], k=2)
-                            doc_preprocessor_image_copy = np.rot90(
-                                doc_preprocessor_image_copy, k=2
-                            )
+                            crop_img = np.rot90(crop_img, k=2)
                         elif table_angle == "270":
-                            crop_img_info["img"] = np.rot90(crop_img_info["img"], k=3)
-                            doc_preprocessor_image_copy = np.rot90(
-                                doc_preprocessor_image_copy, k=3
+                            crop_img = np.rot90(crop_img, k=3)
+
+                        # OCR only the cropped table region (OPTIMIZED!)
+                        table_ocr_res = list(
+                            self.general_ocr_pipeline(
+                                crop_img,
+                                text_det_limit_side_len=text_det_limit_side_len,
+                                text_det_limit_type=text_det_limit_type,
+                                text_det_thresh=text_det_thresh,
+                                text_det_box_thresh=text_det_box_thresh,
+                                text_det_unclip_ratio=text_det_unclip_ratio,
+                                text_rec_score_thresh=text_rec_score_thresh,
                             )
+                        )[0]
+
+                        # Adjust table_box coordinates if rotated
+                        original_table_box = table_box.copy() if isinstance(table_box, list) else list(table_box)
                         if table_angle in ["90", "180", "270"]:
-                            overall_ocr_res = list(
-                                self.general_ocr_pipeline(
-                                    doc_preprocessor_image_copy,
-                                    text_det_limit_side_len=text_det_limit_side_len,
-                                    text_det_limit_type=text_det_limit_type,
-                                    text_det_thresh=text_det_thresh,
-                                    text_det_box_thresh=text_det_box_thresh,
-                                    text_det_unclip_ratio=text_det_unclip_ratio,
-                                    text_rec_score_thresh=text_rec_score_thresh,
-                                )
-                            )[0]
                             tbx1, tby1, tbx2, tby2 = (
-                                table_box[0],
-                                table_box[1],
-                                table_box[2],
-                                table_box[3],
+                                original_table_box[0],
+                                original_table_box[1],
+                                original_table_box[2],
+                                original_table_box[3],
                             )
                             if table_angle == "90":
                                 new_x1, new_y1 = tby1, img_width - tbx2
@@ -1350,10 +1398,16 @@ class _TableRecognitionPipelineV2(BasePipeline):
                                 new_x1, new_y1 = img_height - tby2, tbx1
                                 new_x2, new_y2 = img_height - tby1, tbx2
                             table_box = [new_x1, new_y1, new_x2, new_y2]
+
+                        # Adjust OCR coordinates from crop to global image
+                        adjusted_ocr_res = self.adjust_ocr_coordinates_to_global(
+                            table_ocr_res, table_box
+                        )
+
                         single_table_rec_res = (
                             self.predict_single_table_recognition_res(
-                                crop_img_info["img"],
-                                overall_ocr_res,
+                                crop_img,
+                                adjusted_ocr_res,
                                 table_box,
                                 use_e2e_wired_table_rec_model,
                                 use_e2e_wireless_table_rec_model,
@@ -1367,15 +1421,13 @@ class _TableRecognitionPipelineV2(BasePipeline):
                             use_table_orientation_classify == True
                             and table_angle != "0"
                         ):
-                            img_height_copy, img_width_copy = (
-                                doc_preprocessor_image_copy.shape[:2]
-                            )
+                            img_height_rotated, img_width_rotated = crop_img.shape[:2]
                             single_table_rec_res["cell_box_list"] = (
                                 self.map_cells_to_original_image(
                                     single_table_rec_res["cell_box_list"],
                                     table_angle,
-                                    img_width_copy,
-                                    img_height_copy,
+                                    img_width_rotated,
+                                    img_height_rotated,
                                 )
                             )
                         table_res_list.append(single_table_rec_res)
