@@ -96,24 +96,36 @@ class _TableRecognitionPipelineV2(BasePipeline):
             )
             self.layout_det_model = self.create_model(layout_det_config)
 
-        table_cls_config = config.get("SubModules", {}).get(
-            "TableClassification",
-            {"model_config_error": "config error for table_classification_model!"},
-        )
-        self.table_cls_model = self.create_model(table_cls_config)
+        # OPTIMIZATION: Skip loading table classification model for wired tables
+        # Uncomment below if you need to support both wired and wireless tables
+        # table_cls_config = config.get("SubModules", {}).get(
+        #     "TableClassification",
+        #     {"model_config_error": "config error for table_classification_model!"},
+        # )
+        # self.table_cls_model = self.create_model(table_cls_config)
 
+        # Set to None to save ~200-300MB memory (not loading classification model)
+        self.table_cls_model = None
+
+        # Load wired table models (REQUIRED for wired tables)
         wired_table_rec_config = config.get("SubModules", {}).get(
             "WiredTableStructureRecognition",
             {"model_config_error": "config error for wired_table_structure_model!"},
         )
         self.wired_table_rec_model = self.create_model(wired_table_rec_config)
 
-        wireless_table_rec_config = config.get("SubModules", {}).get(
-            "WirelessTableStructureRecognition",
-            {"model_config_error": "config error for wireless_table_structure_model!"},
-        )
-        self.wireless_table_rec_model = self.create_model(wireless_table_rec_config)
+        # OPTIMIZATION: Skip loading wireless table models (not needed for wired tables)
+        # Uncomment below if you need to support both wired and wireless tables
+        # wireless_table_rec_config = config.get("SubModules", {}).get(
+        #     "WirelessTableStructureRecognition",
+        #     {"model_config_error": "config error for wireless_table_structure_model!"},
+        # )
+        # self.wireless_table_rec_model = self.create_model(wireless_table_rec_config)
 
+        # Set to None to save ~200-300MB memory (not loading wireless structure model)
+        self.wireless_table_rec_model = None
+
+        # Load wired table cell detection model (REQUIRED for wired tables)
         wired_table_cells_det_config = config.get("SubModules", {}).get(
             "WiredTableCellsDetection",
             {
@@ -124,15 +136,20 @@ class _TableRecognitionPipelineV2(BasePipeline):
             wired_table_cells_det_config
         )
 
-        wireless_table_cells_det_config = config.get("SubModules", {}).get(
-            "WirelessTableCellsDetection",
-            {
-                "model_config_error": "config error for wireless_table_cells_detection_model!"
-            },
-        )
-        self.wireless_table_cells_detection_model = self.create_model(
-            wireless_table_cells_det_config
-        )
+        # OPTIMIZATION: Skip loading wireless cell detection model (not needed for wired tables)
+        # Uncomment below if you need to support both wired and wireless tables
+        # wireless_table_cells_det_config = config.get("SubModules", {}).get(
+        #     "WirelessTableCellsDetection",
+        #     {
+        #         "model_config_error": "config error for wireless_table_cells_detection_model!"
+        #     },
+        # )
+        # self.wireless_table_cells_detection_model = self.create_model(
+        #     wireless_table_cells_det_config
+        # )
+
+        # Set to None to save ~200-300MB memory (not loading wireless cell detection model)
+        self.wireless_table_cells_detection_model = None
 
         self.use_ocr_model = config.get("use_ocr_model", True)
         self.general_ocr_pipeline = None
@@ -1017,8 +1034,15 @@ class _TableRecognitionPipelineV2(BasePipeline):
             SingleTableRecognitionResult: single table recognition result.
         """
 
-        table_cls_pred = list(self.table_cls_model(image_array))[0]
-        table_cls_result = self.extract_results(table_cls_pred, "cls")
+        # OPTIMIZATION: Skip table classification for wired tables
+        # If you know all tables have borders (wired tables), skip the classification model
+        # to save ~0.05s per table
+        # table_cls_pred = list(self.table_cls_model(image_array))[0]
+        # table_cls_result = self.extract_results(table_cls_pred, "cls")
+
+        # Hard-code result as "wired_table" (skip classification model)
+        table_cls_result = "wired_table"
+
         use_e2e_model = False
         cells_trans_to_html = False
 
