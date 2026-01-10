@@ -143,6 +143,17 @@ class VietOCRONNXRecognizer:
         Returns:
             np.ndarray: Preprocessed image (1, C, H, W)
         """
+        # Check if image is valid
+        if img is None or img.size == 0:
+            raise ValueError("Input image is empty or None")
+
+        # Get original dimensions
+        h, w = img.shape[:2] if len(img.shape) >= 2 else (0, 0)
+
+        # Check dimensions
+        if h == 0 or w == 0:
+            raise ValueError(f"Invalid image dimensions: {img.shape}")
+
         # Convert to RGB if grayscale
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
@@ -152,17 +163,20 @@ class VietOCRONNXRecognizer:
             # Assume BGR, convert to RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # Get original dimensions
-        h, w = img.shape[:2]
-
         # Resize to target height, maintain aspect ratio
         if self.target_width is None:
             # Dynamic width - maintain aspect ratio
             ratio = self.target_height / h
             new_w = int(w * ratio)
+            # Ensure minimum width
+            new_w = max(1, new_w)
         else:
             # Fixed width
             new_w = self.target_width
+
+        # Ensure valid dimensions for resize
+        if new_w <= 0 or self.target_height <= 0:
+            raise ValueError(f"Invalid resize dimensions: ({new_w}, {self.target_height})")
 
         resized = cv2.resize(img, (new_w, self.target_height))
 
@@ -245,17 +259,28 @@ class VietOCRONNXRecognizer:
 
             # Preprocess all images in batch
             preprocessed_batch = []
-            for img in batch_imgs:
-                preprocessed = self._preprocess(img)
-                preprocessed_batch.append(preprocessed)
+            invalid_indices = []  # Track which images failed preprocessing
 
-            # Concatenate batch
-            if len(preprocessed_batch) > 0:
+            for idx, img in enumerate(batch_imgs):
+                try:
+                    preprocessed = self._preprocess(img)
+                    preprocessed_batch.append(preprocessed)
+                except (ValueError, cv2.error) as e:
+                    # Handle invalid images (too small, empty, etc.)
+                    invalid_indices.append(idx)
+                    print(f"⚠️ VietOCR preprocessing warning: {e} (image {i+idx})")
+                    # Add dummy result for this image
+                    preprocessed_batch.append(None)
+
+            # Filter out None values (invalid images)
+            valid_batch = [img for img in preprocessed_batch if img is not None]
+
+            if len(valid_batch) > 0:
                 # Stack images (handle different widths by padding to max width)
-                max_width = max([img.shape[3] for img in preprocessed_batch])
+                max_width = max([img.shape[3] for img in valid_batch])
 
                 padded_batch = []
-                for img in preprocessed_batch:
+                for img in valid_batch:
                     if img.shape[3] < max_width:
                         # Pad width to max_width
                         pad_width = max_width - img.shape[3]
@@ -273,22 +298,35 @@ class VietOCRONNXRecognizer:
                     translated_sentences = self._translate_onnx(batch_array)
 
                     # Decode each result
-                    for sentence_ids in translated_sentences:
-                        rec_text = self.vocab.decode(sentence_ids.tolist())
+                    valid_idx = 0
+                    for idx in range(len(batch_imgs)):
+                        if idx in invalid_indices:
+                            # Return empty result for invalid images
+                            yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
+                        else:
+                            # Return recognition result
+                            sentence_ids = translated_sentences[valid_idx]
+                            rec_text = self.vocab.decode(sentence_ids.tolist())
 
-                        # Calculate confidence score (placeholder - not available from VietOCR)
-                        rec_score = 0.95
+                            # Calculate confidence score (placeholder)
+                            rec_score = 0.95 if rec_text else 0.0
 
-                        result = {
-                            "rec_text": rec_text,
-                            "rec_score": rec_score,
-                            "vis_font": "vietnamese",
-                        }
+                            result = {
+                                "rec_text": rec_text,
+                                "rec_score": rec_score,
+                                "vis_font": "vietnamese",
+                            }
 
-                        yield result
+                            yield result
+                            valid_idx += 1
 
                 except Exception as e:
                     print(f"⚠️ VietOCR inference error: {e}")
                     # Return empty result on error
                     for _ in batch_imgs:
                         yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
+            else:
+                # All images in batch are invalid
+                print(f"⚠️ VietOCR: All images in batch are invalid")
+                for _ in batch_imgs:
+                    yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
