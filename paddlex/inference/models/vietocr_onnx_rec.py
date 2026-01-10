@@ -147,26 +147,37 @@ class VietOCRONNXRecognizer:
         if img is None or img.size == 0:
             raise ValueError("Input image is empty or None")
 
-        # Get original dimensions
-        h, w = img.shape[:2] if len(img.shape) >= 2 else (0, 0)
+        # Check initial dimensions
+        if len(img.shape) < 2:
+            raise ValueError(f"Invalid image shape: {img.shape}")
 
-        # Check dimensions
+        h, w = img.shape[:2]
         if h == 0 or w == 0:
-            raise ValueError(f"Invalid image dimensions: {img.shape}")
+            raise ValueError(f"Invalid image dimensions: h={h}, w={w}, shape={img.shape}")
 
         # Convert to RGB if grayscale
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        elif img.shape[2] == 4:
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-        elif img.shape[2] == 3 and img.dtype == np.uint8:
-            # Assume BGR, convert to RGB
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif len(img.shape) == 3:
+            if img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+            elif img.shape[2] == 3:
+                # Assume BGR, convert to RGB
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        else:
+            raise ValueError(f"Unexpected image shape: {img.shape}")
+
+        # Get dimensions AFTER color conversion
+        h, w = img.shape[:2]
+
+        # Double-check after conversion
+        if h == 0 or w == 0:
+            raise ValueError(f"Invalid dimensions after color conversion: h={h}, w={w}")
 
         # Resize to target height, maintain aspect ratio
         if self.target_width is None:
             # Dynamic width - maintain aspect ratio
-            ratio = self.target_height / h
+            ratio = float(self.target_height) / float(h)
             new_w = int(w * ratio)
             # Ensure minimum width
             new_w = max(1, new_w)
@@ -174,11 +185,20 @@ class VietOCRONNXRecognizer:
             # Fixed width
             new_w = self.target_width
 
-        # Ensure valid dimensions for resize
+        # Final validation
         if new_w <= 0 or self.target_height <= 0:
-            raise ValueError(f"Invalid resize dimensions: ({new_w}, {self.target_height})")
+            raise ValueError(
+                f"Invalid resize dimensions: width={new_w}, height={self.target_height} "
+                f"(original: h={h}, w={w})"
+            )
 
-        resized = cv2.resize(img, (new_w, self.target_height))
+        try:
+            resized = cv2.resize(img, (new_w, self.target_height))
+        except cv2.error as e:
+            raise ValueError(
+                f"cv2.resize failed: {e}. "
+                f"Input shape: {img.shape}, Target size: ({new_w}, {self.target_height})"
+            )
 
         # Normalize to [0, 1]
         img_array = resized.astype(np.float32) / 255.0
