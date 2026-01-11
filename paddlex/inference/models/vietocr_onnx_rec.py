@@ -292,61 +292,33 @@ class VietOCRONNXRecognizer:
                     # Add dummy result for this image
                     preprocessed_batch.append(None)
 
-            # Filter out None values (invalid images)
-            valid_batch = [img for img in preprocessed_batch if img is not None]
-
-            if len(valid_batch) > 0:
-                # Stack images (handle different widths by padding to max width)
-                max_width = max([img.shape[3] for img in valid_batch])
-
-                padded_batch = []
-                for img in valid_batch:
-                    if img.shape[3] < max_width:
-                        # Pad width to max_width
-                        pad_width = max_width - img.shape[3]
-                        padded = np.pad(
-                            img, ((0, 0), (0, 0), (0, 0), (0, pad_width)), mode="constant"
-                        )
-                        padded_batch.append(padded)
-                    else:
-                        padded_batch.append(img)
-
-                batch_array = np.concatenate(padded_batch, axis=0)
-
-                # Run inference
-                try:
-                    translated_sentences = self._translate_onnx(batch_array)
-
-                    # Decode each result
-                    valid_idx = 0
-                    for idx in range(len(batch_imgs)):
-                        if idx in invalid_indices:
-                            # Return empty result for invalid images
-                            yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
-                        else:
-                            # Return recognition result
-                            sentence_ids = translated_sentences[valid_idx]
-                            rec_text = self.vocab.decode(sentence_ids.tolist())
-
-                            # Calculate confidence score (placeholder)
-                            rec_score = 0.95 if rec_text else 0.0
-
-                            result = {
-                                "rec_text": rec_text,
-                                "rec_score": rec_score,
-                                "vis_font": "vietnamese",
-                            }
-
-                            yield result
-                            valid_idx += 1
-
-                except Exception as e:
-                    print(f"⚠️ VietOCR inference error: {e}")
-                    # Return empty result on error
-                    for _ in batch_imgs:
-                        yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
-            else:
-                # All images in batch are invalid
-                print(f"⚠️ VietOCR: All images in batch are invalid")
-                for _ in batch_imgs:
+            # Process each image individually (VietOCR ONNX only supports batch_size=1)
+            for idx, img_data in enumerate(preprocessed_batch):
+                if img_data is None:
+                    # Invalid image, return empty result
                     yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
+                else:
+                    # Run inference on single image
+                    try:
+                        # img_data is already (1, C, H, W), ready for ONNX
+                        translated_sentence = self._translate_onnx(img_data)
+
+                        # Decode result (get first and only result since batch=1)
+                        sentence_ids = translated_sentence[0]
+                        rec_text = self.vocab.decode(sentence_ids.tolist())
+
+                        # Calculate confidence score
+                        rec_score = 0.95 if rec_text else 0.0
+
+                        result = {
+                            "rec_text": rec_text,
+                            "rec_score": rec_score,
+                            "vis_font": "vietnamese",
+                        }
+
+                        yield result
+
+                    except Exception as e:
+                        print(f"⚠️ VietOCR inference error: {e}")
+                        # Return empty result on error
+                        yield {"rec_text": "", "rec_score": 0.0, "vis_font": "vietnamese"}
