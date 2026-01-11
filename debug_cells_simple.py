@@ -133,12 +133,41 @@ def debug_cells(image_path):
         try:
             struct_res = list(p.wired_table_rec_model(crop_img))[0]
 
+            # Check for 'html' or 'structure' key (different model versions use different keys)
             if 'html' in struct_res:
                 html = struct_res['html']
                 print(f"✅ HTML structure generated ({len(html)} chars)")
                 print(f"HTML preview:\n{html[:300]}...")
+            elif 'structure' in struct_res:
+                structure = struct_res['structure']
+                print(f"✅ Structure recognized (key='structure')")
+                print(f"   Type: {type(structure)}")
+                if isinstance(structure, str):
+                    print(f"   Length: {len(structure)} chars")
+                    print(f"\nStructure preview:\n{structure[:400]}...")
+                elif isinstance(structure, list):
+                    print(f"   List length: {len(structure)}")
+                    print(f"   First few items: {structure[:3]}")
+                else:
+                    print(f"   Content: {structure}")
+
+                # Check score
+                if 'structure_score' in struct_res:
+                    score = struct_res['structure_score']
+                    if isinstance(score, list):
+                        print(f"\n   Structure scores: {score[:10]}..." if len(score) > 10 else f"\n   Structure scores: {score}")
+                    else:
+                        print(f"\n   Structure score: {score}")
             else:
-                print(f"❌ No HTML in result (keys: {list(struct_res.keys())})")
+                print(f"⚠️  No 'html' or 'structure' key in result")
+                print(f"   Available keys: {list(struct_res.keys())}")
+                # Print first 200 chars of each key value
+                for key in struct_res.keys():
+                    val = struct_res[key]
+                    if isinstance(val, str) and len(val) < 200:
+                        print(f"   {key}: {val}")
+                    elif isinstance(val, (list, dict)):
+                        print(f"   {key}: {type(val).__name__} with {len(val)} items")
 
         except Exception as e:
             print(f"❌ Structure recognition error: {e}")
