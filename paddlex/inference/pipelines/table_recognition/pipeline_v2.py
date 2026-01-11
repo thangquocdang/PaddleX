@@ -1104,9 +1104,27 @@ class _TableRecognitionPipelineV2(BasePipeline):
                 table_structure_result = self.extract_results(
                     table_structure_pred, "table_stru"
                 )
-                ocr_det_boxes = self.get_region_ocr_det_boxes(
-                    overall_ocr_res["rec_boxes"].tolist(), table_box
-                )
+
+                # Detect if we're using per-table OCR (local coordinates)
+                # If image_array dimensions match crop size (smaller than table_box span),
+                # then OCR is already in local coordinates
+                img_h, img_w = image_array.shape[:2]
+                table_w = table_box[2] - table_box[0]
+                table_h = table_box[3] - table_box[1]
+
+                # Check if this is per-table OCR mode (local coordinates)
+                is_per_table_ocr = (img_w <= table_w + 10) and (img_h <= table_h + 10)
+
+                if is_per_table_ocr:
+                    # Per-table OCR: ALL OCR boxes are already within table region
+                    # No need to filter by table_box
+                    ocr_det_boxes = overall_ocr_res["rec_boxes"].tolist()
+                else:
+                    # Full-image OCR: Need to filter OCR boxes by table_box
+                    ocr_det_boxes = self.get_region_ocr_det_boxes(
+                        overall_ocr_res["rec_boxes"].tolist(), table_box
+                    )
+
                 table_cells_result = self.cells_det_results_reprocessing(
                     table_cells_result,
                     table_cells_score,
@@ -1115,10 +1133,16 @@ class _TableRecognitionPipelineV2(BasePipeline):
                 )
             if use_ocr_results_with_table_cells == True:
                 if self.cells_split_ocr == True:
-                    table_box_copy = np.array([table_box])
-                    table_ocr_pred = get_sub_regions_ocr_res(
-                        overall_ocr_res, table_box_copy
-                    )
+                    if is_per_table_ocr:
+                        # Per-table OCR: Use all OCR boxes (already filtered to table region)
+                        table_ocr_pred = overall_ocr_res
+                    else:
+                        # Full-image OCR: Filter to table region
+                        table_box_copy = np.array([table_box])
+                        table_ocr_pred = get_sub_regions_ocr_res(
+                            overall_ocr_res, table_box_copy
+                        )
+
                     table_ocr_pred = self.split_ocr_bboxes_by_table_cells(
                         table_cells_result, table_ocr_pred, image_array
                     )
@@ -1425,15 +1449,23 @@ class _TableRecognitionPipelineV2(BasePipeline):
                                 new_x2, new_y2 = img_height - tby1, tbx2
                             table_box = [new_x1, new_y1, new_x2, new_y2]
 
-                        # Adjust OCR coordinates from crop to global image
+                        # For per-table OCR optimization:
+                        # - Pass LOCAL OCR (table_ocr_res) for matching with cells
+                        # - Cells are in local coordinates [0-crop_w, 0-crop_h]
+                        # - OCR must also be in local coordinates to match correctly
+                        # - We'll store both local and global OCR in the result
+
+                        # Adjust OCR coordinates from crop to global image (for neighbor text finding)
                         adjusted_ocr_res = self.adjust_ocr_coordinates_to_global(
                             table_ocr_res, table_box
                         )
 
+                        # IMPORTANT: Pass LOCAL OCR (table_ocr_res) not global (adjusted_ocr_res)
+                        # because crop_img and cells are in local coordinates
                         single_table_rec_res = (
                             self.predict_single_table_recognition_res(
                                 crop_img,
-                                adjusted_ocr_res,
+                                table_ocr_res,  # ← Use LOCAL OCR for cell matching
                                 table_box,
                                 use_e2e_wired_table_rec_model,
                                 use_e2e_wireless_table_rec_model,
@@ -1442,6 +1474,9 @@ class _TableRecognitionPipelineV2(BasePipeline):
                                 use_ocr_results_with_table_cells,
                             )
                         )
+
+                        # Store local OCR result for visualization
+                        single_table_rec_res["table_ocr_pred"] = table_ocr_res
                         single_table_rec_res["table_region_id"] = table_region_id
                         if (
                             use_table_orientation_classify == True
