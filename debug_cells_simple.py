@@ -144,9 +144,22 @@ def debug_cells(image_path):
             print(f"❌ Structure recognition error: {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Debug table cell detection')
+    parser.add_argument('image_path', nargs='?', help='Path to input image')
+    parser.add_argument('--image_path', dest='image_path_flag', help='Path to input image (alternative)')
+
+    args = parser.parse_args()
+
+    # Support both positional and --image_path flag
+    image_path = args.image_path or args.image_path_flag
+
+    if not image_path:
         print("Usage: python debug_cells_simple.py <image_path>")
-        print("Example: python debug_cells_simple.py /content/image.jpg")
+        print("   or: python debug_cells_simple.py --image_path <image_path>")
+        print("\nExample: python debug_cells_simple.py /content/image.jpg")
+        print("     or: python debug_cells_simple.py --image_path /content/image.jpg")
         sys.exit(1)
 
-    debug_cells(sys.argv[1])
+    debug_cells(image_path)
