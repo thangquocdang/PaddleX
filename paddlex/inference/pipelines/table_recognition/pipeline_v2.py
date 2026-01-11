@@ -1058,12 +1058,14 @@ class _TableRecognitionPipelineV2(BasePipeline):
                         self.wired_table_rec_model(image_array)
                     )[0]
             else:
+                # LOWER threshold to 0.1 for better recall (detect more cells)
+                # Original was 0.3, but this may miss cells with lower confidence
                 table_cells_pred = list(
-                    self.wired_table_cells_detection_model(image_array, threshold=0.3)
+                    self.wired_table_cells_detection_model(image_array, threshold=0.1)
                 )[
                     0
-                ]  # Setting the threshold to 0.3 can improve the accuracy of table cells detection.
-                # If you really want more or fewer table cells detection boxes, the threshold can be adjusted.
+                ]  # Lower threshold = more cells detected (may include false positives)
+                # Adjust between 0.05 (max recall) to 0.5 (max precision)
         elif table_cls_result == "wireless_table":
             if use_wireless_table_cells_trans_to_html == True:
                 cells_trans_to_html = True
