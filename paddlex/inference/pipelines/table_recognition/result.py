@@ -118,7 +118,9 @@ class TableRecognitionResult(BaseCVResult, HtmlMixin, XlsxMixin):
         if model_settings["use_doc_preprocessor"]:
             res_img_dict.update(**self["doc_preprocessor_res"].img)
 
-        res_img_dict.update(**self["overall_ocr_res"].img)
+        # Handle overall_ocr_res being None (when using per-table OCR optimization)
+        if self["overall_ocr_res"] is not None:
+            res_img_dict.update(**self["overall_ocr_res"].img)
 
         if len(self["table_res_list"]) > 0:
             table_cell_img = Image.fromarray(
@@ -181,7 +183,11 @@ class TableRecognitionResult(BaseCVResult, HtmlMixin, XlsxMixin):
             data["doc_preprocessor_res"] = self["doc_preprocessor_res"].json["res"]
         if len(self["layout_det_res"]) > 0:
             data["layout_det_res"] = self["layout_det_res"].json["res"]
-        data["overall_ocr_res"] = self["overall_ocr_res"].json["res"]
+        # Handle overall_ocr_res being None (when using per-table OCR optimization)
+        if self["overall_ocr_res"] is not None:
+            data["overall_ocr_res"] = self["overall_ocr_res"].json["res"]
+        else:
+            data["overall_ocr_res"] = None
         data["table_res_list"] = []
         for sno in range(len(self["table_res_list"])):
             table_res = self["table_res_list"][sno]
