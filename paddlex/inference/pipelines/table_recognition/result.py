@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from ...common.result import BaseCVResult, HtmlMixin, JsonMixin, XlsxMixin
 
@@ -121,13 +121,47 @@ class TableRecognitionResult(BaseCVResult, HtmlMixin, XlsxMixin):
         # Handle overall_ocr_res being None (when using per-table OCR optimization)
         if self["overall_ocr_res"] is not None:
             res_img_dict.update(**self["overall_ocr_res"].img)
+        else:
+            # When using per-table OCR, create OCR visualization from table results
+            if len(self["table_res_list"]) > 0:
+                ocr_overlay_img = Image.fromarray(
+                    copy.deepcopy(self["doc_preprocessor_res"]["output_img"][:, :, ::-1])
+                )
+                ocr_draw = ImageDraw.Draw(ocr_overlay_img)
+
+                # Try to load font
+                try:
+                    from ....utils.fonts import SIMFANG_FONT
+                    font = ImageFont.truetype(SIMFANG_FONT, 15)
+                except:
+                    font = ImageFont.load_default()
+
+                # Draw OCR results from each table
+                for table_res in self["table_res_list"]:
+                    if "table_ocr_pred" in table_res and table_res["table_ocr_pred"]:
+                        ocr_pred = table_res["table_ocr_pred"]
+                        if "rec_boxes" in ocr_pred and "rec_texts" in ocr_pred:
+                            boxes = ocr_pred["rec_boxes"]
+                            texts = ocr_pred["rec_texts"]
+
+                            for box, text in zip(boxes, texts):
+                                # Draw box
+                                x1, y1, x2, y2 = [int(p) for p in box]
+                                ocr_draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=2)
+
+                                # Draw text
+                                ocr_draw.text((x1, y1-20), text, fill=(255, 0, 0), font=font)
+
+                res_img_dict["ocr_res"] = ocr_overlay_img
 
         if len(self["table_res_list"]) > 0:
+            # Draw cell boxes
             table_cell_img = Image.fromarray(
                 copy.deepcopy(self["doc_preprocessor_res"]["output_img"][:, :, ::-1])
             )
             table_draw = ImageDraw.Draw(table_cell_img)
             rectangle_color = (255, 0, 0)
+
             for sno in range(len(self["table_res_list"])):
                 table_res = self["table_res_list"][sno]
                 cell_box_list = table_res["cell_box_list"]
@@ -137,6 +171,42 @@ class TableRecognitionResult(BaseCVResult, HtmlMixin, XlsxMixin):
                         [x1, y1, x2, y2], outline=rectangle_color, width=2
                     )
             res_img_dict["table_cell_img"] = table_cell_img
+
+            # Create individual visualization for each table with OCR text
+            for sno, table_res in enumerate(self["table_res_list"]):
+                table_with_text_img = Image.fromarray(
+                    copy.deepcopy(self["doc_preprocessor_res"]["output_img"][:, :, ::-1])
+                )
+                text_draw = ImageDraw.Draw(table_with_text_img)
+
+                # Try to load font
+                try:
+                    from ....utils.fonts import SIMFANG_FONT
+                    font = ImageFont.truetype(SIMFANG_FONT, 12)
+                except:
+                    font = ImageFont.load_default()
+
+                # Draw cells
+                cell_box_list = table_res["cell_box_list"]
+                for box in cell_box_list:
+                    x1, y1, x2, y2 = [int(pos) for pos in box]
+                    text_draw.rectangle([x1, y1, x2, y2], outline=(0, 0, 255), width=1)
+
+                # Draw OCR text in cells
+                if "table_ocr_pred" in table_res and table_res["table_ocr_pred"]:
+                    ocr_pred = table_res["table_ocr_pred"]
+                    if "rec_boxes" in ocr_pred and "rec_texts" in ocr_pred:
+                        boxes = ocr_pred["rec_boxes"]
+                        texts = ocr_pred["rec_texts"]
+
+                        for box, text in zip(boxes, texts):
+                            x1, y1, x2, y2 = [int(p) for p in box]
+                            # Draw text with background
+                            text_bbox = text_draw.textbbox((x1+2, y1+2), text, font=font)
+                            text_draw.rectangle(text_bbox, fill=(255, 255, 255), outline=(0, 0, 0))
+                            text_draw.text((x1+2, y1+2), text, fill=(255, 0, 0), font=font)
+
+                res_img_dict[f"table_{sno+1}_with_text"] = table_with_text_img
         return res_img_dict
 
     def _to_str(self, *args, **kwargs) -> Dict[str, str]:
