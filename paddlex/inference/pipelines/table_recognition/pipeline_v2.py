@@ -1463,11 +1463,17 @@ class _TableRecognitionPipelineV2(BasePipeline):
                         # IMPORTANT: Pass LOCAL OCR (table_ocr_res) not global (adjusted_ocr_res)
                         # because crop_img and cells are in local coordinates
                         # Also disable neighbor text finding since local OCR has no text outside table
+
+                        # For per-table OCR mode, use LOCAL table box [0, 0, w, h]
+                        # to prevent cells from being converted to global coordinates
+                        crop_h, crop_w = crop_img.shape[:2]
+                        local_table_box = [0, 0, crop_w, crop_h]
+
                         single_table_rec_res = (
                             self.predict_single_table_recognition_res(
                                 crop_img,
-                                table_ocr_res,  # ← Use LOCAL OCR for cell matching
-                                table_box,
+                                table_ocr_res,       # ← LOCAL OCR
+                                local_table_box,     # ← LOCAL box [0, 0, w, h] not global!
                                 use_e2e_wired_table_rec_model,
                                 use_e2e_wireless_table_rec_model,
                                 use_wired_table_cells_trans_to_html,
@@ -1476,6 +1482,33 @@ class _TableRecognitionPipelineV2(BasePipeline):
                                 flag_find_nei_text=False,  # ← Disable neighbor text for per-table OCR
                             )
                         )
+
+                        # Restore global table_box for result metadata
+                        single_table_rec_res["table_box"] = table_box
+
+                        # Convert cells from local to global coordinates for visualization
+                        if "cell_box_list" in single_table_rec_res:
+                            cell_boxes = single_table_rec_res["cell_box_list"]
+                            global_cell_boxes = []
+                            for cell_box in cell_boxes:
+                                # Convert to list if numpy array
+                                if hasattr(cell_box, 'tolist'):
+                                    cell_box = cell_box.tolist()
+                                # cell_box might be [x1, y1, x2, y2] or [x1, y1, x2, y2, ...]
+                                if len(cell_box) >= 4:
+                                    global_box = [
+                                        cell_box[0] + table_box[0],  # x1
+                                        cell_box[1] + table_box[1],  # y1
+                                        cell_box[2] + table_box[0],  # x2
+                                        cell_box[3] + table_box[1],  # y2
+                                    ]
+                                    # Preserve extra coordinates if any
+                                    if len(cell_box) > 4:
+                                        global_box.extend(cell_box[4:])
+                                    global_cell_boxes.append(np.array(global_box))
+                                else:
+                                    global_cell_boxes.append(np.array(cell_box))
+                            single_table_rec_res["cell_box_list"] = global_cell_boxes
 
                         # Store local OCR result for visualization
                         # Convert OCRResult to plain dict to avoid JSON serialization issues with Font objects
