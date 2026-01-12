@@ -1478,7 +1478,13 @@ class _TableRecognitionPipelineV2(BasePipeline):
                         )
 
                         # Store local OCR result for visualization
-                        single_table_rec_res["table_ocr_pred"] = table_ocr_res
+                        # Convert OCRResult to plain dict to avoid JSON serialization issues with Font objects
+                        single_table_rec_res["table_ocr_pred"] = {
+                            "rec_texts": table_ocr_res.get("rec_texts", []),
+                            "rec_scores": table_ocr_res.get("rec_scores", []),
+                            "rec_boxes": table_ocr_res.get("rec_boxes", []).tolist() if hasattr(table_ocr_res.get("rec_boxes", []), "tolist") else table_ocr_res.get("rec_boxes", []),
+                            "rec_polys": table_ocr_res.get("rec_polys", [])
+                        }
                         single_table_rec_res["table_region_id"] = table_region_id
                         if (
                             use_table_orientation_classify == True
