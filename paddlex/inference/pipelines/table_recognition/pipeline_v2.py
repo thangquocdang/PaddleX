@@ -1462,6 +1462,7 @@ class _TableRecognitionPipelineV2(BasePipeline):
 
                         # IMPORTANT: Pass LOCAL OCR (table_ocr_res) not global (adjusted_ocr_res)
                         # because crop_img and cells are in local coordinates
+                        # Also disable neighbor text finding since local OCR has no text outside table
                         single_table_rec_res = (
                             self.predict_single_table_recognition_res(
                                 crop_img,
@@ -1472,6 +1473,7 @@ class _TableRecognitionPipelineV2(BasePipeline):
                                 use_wired_table_cells_trans_to_html,
                                 use_wireless_table_cells_trans_to_html,
                                 use_ocr_results_with_table_cells,
+                                flag_find_nei_text=False,  # ← Disable neighbor text for per-table OCR
                             )
                         )
 
